@@ -24,8 +24,8 @@ A comprehensive insider threat detection system built with Python and Tkinter th
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd "Insider Threat"
+git clone https://github.com/Shaik123Imran/internal-threat-monitor.git
+cd internal-threat-monitor
 ```
 
 2. Install dependencies:
@@ -57,7 +57,7 @@ python main.py
 ## Project Structure
 
 ```
-Insider Threat/
+internal-threat-monitor/
 ├── main.py              # Main application entry point
 ├── config.py            # Configuration and constants
 ├── gui_styles.py        # GUI styling and themes
@@ -92,4 +92,3 @@ Academic Project - For educational purposes only
 
 [Your Name]
 [Course Name]
-
