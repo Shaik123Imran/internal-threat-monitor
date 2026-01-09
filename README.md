@@ -90,5 +90,5 @@ Academic Project - For educational purposes only
 
 ## Author
 
-[Your Name]
-[Course Name]
+[Imran Shaik]
+[Insider Threat Predictor]
