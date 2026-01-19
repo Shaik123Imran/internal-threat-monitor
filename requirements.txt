@@ -20,6 +20,12 @@ scikit-learn>=1.0.0
 # Natural language processing for sentiment analysis
 textblob>=0.17.0
 
+# Database - MongoDB for data persistence
+pymongo>=4.0.0
+
+# HTTP requests for URL data loading
+requests>=2.28.0
+
 # Note: TextBlob requires NLTK data packages:
 # - punkt: Tokenizer models
 # - brown: Corpus data for better sentiment analysis

@@ -45,6 +45,10 @@ from detection import (
     AnomalyDetector, SentimentAnalyzer, SecurityPointsManager, verify_textblob_setup
 )
 
+# Import database and data loading modules
+from storage import DatabaseManager
+from data_loader import DataLoader
+
 
 class InsiderThreatApp:
     """
@@ -55,8 +59,14 @@ class InsiderThreatApp:
     insider threat detection system.
     """
 
-    def __init__(self, root):
-        """Initialize the application window and core components."""
+    def __init__(self, root, mongodb_uri: str = None):
+        """
+        Initialize the application window and core components.
+        
+        Args:
+            root: Tkinter root window
+            mongodb_uri: MongoDB connection URI (default: mongodb://localhost:27017/)
+        """
         self.root = root
         self.root.title("Insider Threat Predictor")
         self.root.geometry("1300x750")
@@ -71,6 +81,12 @@ class InsiderThreatApp:
         self.simulation_active = False
         self.monitoring_running = False
         self.total_activities = 0
+        self.use_real_events = False  # Flag to track if using real events from DB
+        
+        # Initialize database connection
+        default_uri = mongodb_uri or "mongodb://localhost:27017/"
+        self.db_manager = DatabaseManager(default_uri)
+        self.db_connected = self.db_manager.is_connected()
         
         # Initialize detection modules
         self.anomaly_detector = AnomalyDetector()
@@ -78,11 +94,143 @@ class InsiderThreatApp:
         # Build UI
         self.build_ui()
         
+        # Show data input dialog on startup (if DB connected)
+        if self.db_connected:
+            self.show_data_input_dialog()
+        
         # Start risk decay timer
         self.start_risk_decay()
         
         # Verify TextBlob setup
         verify_textblob_setup()
+    
+    def show_data_input_dialog(self):
+        """
+        Show dialog to load data from URL or file.
+        This allows users to provide real event data.
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Load Event Data")
+        dialog.geometry("500x300")
+        dialog.configure(bg=COLORS['bg_dark'])
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (500 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (300 // 2)
+        dialog.geometry(f"500x300+{x}+{y}")
+        
+        tk.Label(
+            dialog,
+            text="Load Event Data",
+            font=FONTS['heading'],
+            bg=COLORS['bg_dark'],
+            fg=COLORS['fg_white']
+        ).pack(pady=20)
+        
+        tk.Label(
+            dialog,
+            text="Choose data source:",
+            font=FONTS['label'],
+            bg=COLORS['bg_dark'],
+            fg=COLORS['fg_white']
+        ).pack(pady=10)
+        
+        # URL input frame
+        url_frame = tk.Frame(dialog, bg=COLORS['bg_dark'])
+        url_frame.pack(pady=10, padx=20, fill="x")
+        
+        tk.Label(
+            url_frame,
+            text="URL:",
+            bg=COLORS['bg_dark'],
+            fg=COLORS['fg_white'],
+            font=FONTS['small']
+        ).pack(side="left", padx=5)
+        
+        url_entry = tk.Entry(url_frame, width=40, font=FONTS['small'])
+        url_entry.pack(side="left", padx=5, fill="x", expand=True)
+        
+        def load_from_url():
+            url = url_entry.get().strip()
+            if not url:
+                messagebox.showwarning("Warning", "Please enter a URL")
+                return
+            
+            self.load_events_from_url(url)
+            dialog.destroy()
+        
+        url_button = tk.Button(
+            url_frame,
+            text="Load from URL",
+            command=load_from_url,
+            bg="#4a8a4a",
+            fg=COLORS['fg_white'],
+            font=FONTS['small'],
+            padx=10,
+            pady=5
+        )
+        url_button.pack(side="left", padx=5)
+        
+        # File input frame
+        file_frame = tk.Frame(dialog, bg=COLORS['bg_dark'])
+        file_frame.pack(pady=10, padx=20, fill="x")
+        
+        def load_from_file():
+            filename = filedialog.askopenfilename(
+                title="Select Event Data File",
+                filetypes=[
+                    ("CSV files", "*.csv"),
+                    ("JSON files", "*.json"),
+                    ("All files", "*.*")
+                ]
+            )
+            if filename:
+                self.load_events_from_file(filename)
+                dialog.destroy()
+        
+        file_button = tk.Button(
+            file_frame,
+            text="📁 Load from File",
+            command=load_from_file,
+            bg="#4a4a8a",
+            fg=COLORS['fg_white'],
+            font=FONTS['small'],
+            padx=20,
+            pady=8
+        )
+        file_button.pack(side="left", padx=5)
+        
+        # Skip button
+        def skip_loading():
+            messagebox.showinfo("Info", "You can load data later using the 'Load Data' button.\nUsing simulated events for now.")
+            dialog.destroy()
+        
+        skip_button = tk.Button(
+            dialog,
+            text="Skip (Use Simulated Data)",
+            command=skip_loading,
+            bg="#4a4a4a",
+            fg=COLORS['fg_white'],
+            font=FONTS['small'],
+            padx=15,
+            pady=5
+        )
+        skip_button.pack(pady=20)
+        
+        # Database status
+        db_status_text = "✓ MongoDB Connected" if self.db_connected else "✗ MongoDB Not Connected"
+        db_status_color = COLORS['fg_green'] if self.db_connected else COLORS['fg_red']
+        
+        tk.Label(
+            dialog,
+            text=db_status_text,
+            bg=COLORS['bg_dark'],
+            fg=db_status_color,
+            font=FONTS['small']
+        ).pack(pady=5)
 
     def build_ui(self):
         """Build the complete user interface."""
@@ -133,15 +281,40 @@ class InsiderThreatApp:
         
         # Initial refresh
         self.refresh_users()
+        
+        # Schedule periodic database status updates
+        self.update_db_status_periodic()
 
     def simulate_activity(self):
-        """Simulate a random user activity and update the system."""
+        """
+        Simulate user activity - uses real events from database if available,
+        otherwise falls back to random simulation.
+        """
         if not self.monitoring_running or not self.simulation_active:
             return
         
-        selected_user = random.choice(list(USERS.keys()))
-        selected_activity = random.choice(list(RISK_RULES.keys()))
-        risk_increase = RISK_RULES[selected_activity]
+        # Try to get real event from database first
+        real_event = None
+        if self.db_connected and self.use_real_events:
+            real_event = self.db_manager.get_next_unprocessed_event()
+        
+        if real_event:
+            # Process real event from database
+            selected_user = real_event['user_id']
+            selected_activity = real_event['activity']
+            risk_increase = real_event.get('risk_increase', RISK_RULES.get(selected_activity, 0))
+            
+            # Mark event as processed
+            self.db_manager.mark_event_processed(real_event['_id'])
+            
+            # Use enhanced details if available
+            event_details = real_event.get('details', '')
+        else:
+            # Fall back to random simulation if no real events available
+            selected_user = random.choice(list(USERS.keys()))
+            selected_activity = random.choice(list(RISK_RULES.keys()))
+            risk_increase = RISK_RULES[selected_activity]
+            event_details = ''
 
         if self.user_status[selected_user] == USER_STATUS_ACTIVE:
             self.risk_scores[selected_user] = max(0, self.risk_scores[selected_user] + risk_increase)
@@ -149,11 +322,33 @@ class InsiderThreatApp:
         else:
             risk_increase = 0
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Use timestamp from real event if available, otherwise use current time
+        if real_event and 'timestamp' in real_event:
+            if isinstance(real_event['timestamp'], datetime):
+                timestamp = real_event['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                timestamp = real_event['timestamp']
+        else:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         activity_description = self.get_activity_description(selected_activity)
+        if event_details:
+            activity_description += f" - {event_details}"
+        
         self.total_activities += 1
         
         self.activity_table.insert("", 0, values=(timestamp, selected_user, activity_description, risk_increase))
+        
+        # Save event to database if not already there (for simulated events)
+        if not real_event and self.db_connected:
+            self.db_manager.save_event({
+                'timestamp': timestamp,
+                'user_id': selected_user,
+                'activity': selected_activity,
+                'risk_increase': risk_increase,
+                'details': event_details,
+                'source': 'simulation'
+            })
 
         # AI Anomaly Detection
         if self.user_status[selected_user] == USER_STATUS_ACTIVE:
@@ -256,9 +451,124 @@ class InsiderThreatApp:
         self.total_activities = 0
         self.anomaly_detector = AnomalyDetector()
         
+        # Clear database events if connected
+        if self.db_connected:
+            self.db_manager.clear_processed_events()
+        
         self.refresh_users()
         self.update_statistics()
         messagebox.showinfo("Reset Complete", "All risk scores, logs, and incidents have been cleared.\nAll users have been unlocked.\nAI model has been reset.")
+    
+    def load_events_from_url(self, url: str):
+        """
+        Load events from a URL and save to database.
+        
+        Args:
+            url: URL to fetch event data from
+        """
+        if not self.db_connected:
+            messagebox.showerror("Error", "MongoDB is not connected. Please check your connection.")
+            return
+        
+        try:
+            # Show loading message
+            loading_msg = messagebox.showinfo("Loading", "Fetching data from URL...\nPlease wait.")
+            
+            # Load events from URL
+            events, error = DataLoader.load_from_url(url)
+            
+            if error:
+                messagebox.showerror("Error", f"Failed to load data from URL:\n{error}")
+                return
+            
+            if not events:
+                messagebox.showwarning("Warning", "No valid events found in the URL data.")
+                return
+            
+            # Save events to database
+            saved_count = self.db_manager.save_events_batch(events)
+            
+            if saved_count > 0:
+                self.use_real_events = True
+                messagebox.showinfo(
+                    "Success",
+                    f"Successfully loaded {saved_count} events from URL!\n\n"
+                    f"Events will be processed when you start monitoring."
+                )
+                self.update_db_status()
+            else:
+                messagebox.showerror("Error", "Failed to save events to database.")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Error loading from URL:\n{str(e)}")
+    
+    def load_events_from_file(self, file_path: str):
+        """
+        Load events from a local file and save to database.
+        
+        Args:
+            file_path: Path to the event data file
+        """
+        if not self.db_connected:
+            messagebox.showerror("Error", "MongoDB is not connected. Please check your connection.")
+            return
+        
+        try:
+            # Load events from file
+            events, error = DataLoader.load_from_file(file_path)
+            
+            if error:
+                messagebox.showerror("Error", f"Failed to load data from file:\n{error}")
+                return
+            
+            if not events:
+                messagebox.showwarning("Warning", "No valid events found in the file.")
+                return
+            
+            # Save events to database
+            saved_count = self.db_manager.save_events_batch(events)
+            
+            if saved_count > 0:
+                self.use_real_events = True
+                messagebox.showinfo(
+                    "Success",
+                    f"Successfully loaded {saved_count} events from file!\n\n"
+                    f"File: {os.path.basename(file_path)}\n"
+                    f"Events will be processed when you start monitoring."
+                )
+                self.update_db_status()
+            else:
+                messagebox.showerror("Error", "Failed to save events to database.")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Error loading from file:\n{str(e)}")
+    
+    def update_db_status(self):
+        """Update the database status indicator in the UI."""
+        if not hasattr(self, 'db_status_label'):
+            return
+        
+        if self.db_connected:
+            unprocessed = self.db_manager.get_unprocessed_event_count()
+            total = self.db_manager.get_total_event_count()
+            
+            if total > 0:
+                status_text = f"DB: ✓ Connected | Events: {unprocessed} unprocessed / {total} total"
+                status_color = COLORS['fg_green']
+            else:
+                status_text = "DB: ✓ Connected | No events loaded"
+                status_color = COLORS['fg_green']
+        else:
+            status_text = "DB: ✗ Not Connected"
+            status_color = COLORS['fg_red']
+        
+        self.db_status_label.config(text=status_text, fg=status_color)
+    
+    def update_db_status_periodic(self):
+        """Periodically update database status indicator."""
+        self.update_db_status()
+        # Update every 5 seconds
+        self.root.after(5000, self.update_db_status_periodic)
     
     def start_risk_decay(self):
         """Start the risk decay timer."""
@@ -377,6 +687,17 @@ class InsiderThreatApp:
         user_role = USERS[user_id]["role"]
         ai_alert_message = f"AI ALERT: {user_id} ({user_role}) - Anomalous behavior detected by Isolation Forest (+{risk_penalty} risk)"
         self.incident_table.insert("", 0, values=(timestamp, user_id, self.risk_scores[user_id], ai_alert_message))
+        
+        # Save AI alert to database
+        if self.db_connected:
+            self.db_manager.save_incident({
+                'timestamp': timestamp,
+                'user_id': user_id,
+                'risk_score': self.risk_scores[user_id],
+                'message': ai_alert_message,
+                'user_role': user_role,
+                'alert_type': 'AI_ANOMALY'
+            })
 
     def export_activity_log(self):
         """Export the activity log to a CSV file."""
@@ -424,7 +745,18 @@ class InsiderThreatApp:
 
 
 if __name__ == "__main__":
+    import sys
+    
+    # Check for MongoDB URI as command line argument
+    mongodb_uri = None
+    if len(sys.argv) > 1:
+        mongodb_uri = sys.argv[1]
+        print(f"Using MongoDB URI: {mongodb_uri}")
+    else:
+        print("Using default MongoDB URI: mongodb://localhost:27017/")
+        print("To specify custom URI: python main.py <mongodb_uri>")
+    
     root_window = tk.Tk()
-    application = InsiderThreatApp(root_window)
+    application = InsiderThreatApp(root_window, mongodb_uri=mongodb_uri)
     root_window.mainloop()
 
