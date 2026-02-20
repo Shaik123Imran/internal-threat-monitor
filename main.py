@@ -283,6 +283,10 @@ class InsiderThreatApp:
         self.refresh_users()
         
         # Schedule periodic database status updates
+        if hasattr(self, 'db_status_label'):
+            self.update_db_status_periodic()
+        
+        # Schedule periodic database status updates
         self.update_db_status_periodic()
 
     def simulate_activity(self):
@@ -295,21 +299,47 @@ class InsiderThreatApp:
         
         # Try to get real event from database first
         real_event = None
+        event_details = ''
+        
         if self.db_connected and self.use_real_events:
-            real_event = self.db_manager.get_next_unprocessed_event()
+            try:
+                real_event = self.db_manager.get_next_unprocessed_event()
+            except Exception as e:
+                print(f"Error getting event from database: {e}")
+                real_event = None
+                # If error getting real event, fall back to simulation
+                self.use_real_events = False
         
         if real_event:
             # Process real event from database
-            selected_user = real_event['user_id']
-            selected_activity = real_event['activity']
-            risk_increase = real_event.get('risk_increase', RISK_RULES.get(selected_activity, 0))
-            
-            # Mark event as processed
-            self.db_manager.mark_event_processed(real_event['_id'])
-            
-            # Use enhanced details if available
-            event_details = real_event.get('details', '')
-        else:
+            try:
+                selected_user = real_event.get('user_id')
+                selected_activity = real_event.get('activity')
+                
+                # Validate event data
+                if not selected_user or not selected_activity:
+                    raise ValueError("Invalid event data: missing user_id or activity")
+                
+                if selected_user not in USERS:
+                    raise ValueError(f"Unknown user: {selected_user}")
+                
+                if selected_activity not in RISK_RULES:
+                    raise ValueError(f"Unknown activity: {selected_activity}")
+                
+                risk_increase = real_event.get('risk_increase', RISK_RULES.get(selected_activity, 0))
+                
+                # Mark event as processed
+                if '_id' in real_event:
+                    self.db_manager.mark_event_processed(real_event['_id'])
+                
+                # Use enhanced details if available
+                event_details = real_event.get('details', '')
+            except Exception as e:
+                print(f"Error processing real event: {e}")
+                # Fall back to simulation
+                real_event = None
+        
+        if not real_event:
             # Fall back to random simulation if no real events available
             selected_user = random.choice(list(USERS.keys()))
             selected_activity = random.choice(list(RISK_RULES.keys()))
@@ -472,7 +502,7 @@ class InsiderThreatApp:
         
         try:
             # Show loading message
-            loading_msg = messagebox.showinfo("Loading", "Fetching data from URL...\nPlease wait.")
+            self.root.update()  # Update UI before showing message
             
             # Load events from URL
             events, error = DataLoader.load_from_url(url)
